@@ -1,7 +1,7 @@
 {
   "name": "aixc-invest-bot",
-  "version": "0.1.0",
-  "description": "AIXC Telegram bot scaffold (Express webhook) - no DB version",
+  "version": "0.2.0",
+  "description": "AIXC Telegram bot scaffold (Express webhook) - with Postgres user persistence",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -16,6 +16,8 @@
     "axios": "^1.4.0",
     "body-parser": "^1.20.2",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "nanoid": "^4.0.0",
+    "pg": "^8.12.0"
   }
 }

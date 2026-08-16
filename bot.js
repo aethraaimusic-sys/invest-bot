@@ -1,4 +1,6 @@
 const axios = require('axios');
+const { nanoid } = require('nanoid');
+const db = require('./db');
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_IDS = (process.env.ADMIN_IDS || '')
@@ -14,6 +16,7 @@ if (!TOKEN) {
 const api = (method) => `https://api.telegram.org/bot${TOKEN}/${method}`;
 
 async function sendMethod(method, payload) {
+  if (!TOKEN) return null; // skip sending if no token configured
   return axios.post(api(method), payload).catch(err => {
     console.error('Telegram API error', err?.response?.data || err.message);
   });
@@ -25,6 +28,7 @@ async function sendMessage(chat_id, text, extra = {}) {
 }
 
 async function answerCallbackQuery(callback_query_id, text) {
+  if (!TOKEN) return null;
   return sendMethod('answerCallbackQuery', { callback_query_id, text });
 }
 
@@ -56,8 +60,42 @@ async function handleMessage(message) {
   const text = message.text || '';
 
   if (text.startsWith('/start')) {
-    const name = (message.from && (message.from.first_name || message.from.username)) || 'there';
-    const welcome = `🏦 AUSTIN INVESTMENT X COURSE\n\nWelcome, ${name} 👋\n\n💰 Balance: $0.00\n📈 Investment: $0.00\n🎁 Referral: $0.00\n\nChoose an option:`;
+    const from = message.from || {};
+    const telegram_id = from.id;
+    const username = from.username || null;
+    const first_name = from.first_name || null;
+    const last_name = from.last_name || null;
+
+    // parse referral code if present
+    const parts = text.split(' ');
+    const refCode = parts[1] ? parts[1].trim() : null;
+
+    // Try to persist user if DB configured
+    let user = null;
+    try {
+      if (db && db.getUserByTelegramId) {
+        user = await db.getUserByTelegramId(telegram_id);
+        if (!user) {
+          // create new user
+          const generatedCode = nanoid(8);
+          let referred_by = null;
+          if (refCode) {
+            const refUser = await db.getUserByReferralCode(refCode);
+            if (refUser) referred_by = refUser.telegram_id;
+          }
+          user = await db.createUser({ telegram_id, username, first_name, last_name, referral_code: generatedCode, referred_by });
+        }
+      }
+    } catch (err) {
+      console.error('DB error in /start', err.message || err);
+    }
+
+    const name = first_name || username || 'there';
+    const balance = user && user.balance ? Number(user.balance).toFixed(2) : '0.00';
+    const invested = user && user.investment_total ? Number(user.investment_total).toFixed(2) : '0.00';
+    const referral_earnings = user && user.referral_earnings ? Number(user.referral_earnings).toFixed(2) : '0.00';
+
+    const welcome = `🏦 AUSTIN INVESTMENT X COURSE\n\nWelcome, ${name} 👋\n\n💰 Balance: $${balance}\n📈 Investment: $${invested}\n🎁 Referral: $${referral_earnings}\n\nChoose an option:`;
     await sendMessage(chatId, welcome, { reply_markup: mainMenuKeyboard() });
     return;
   }
@@ -86,28 +124,44 @@ async function handleCallbackQuery(callback_query) {
 
   switch (data) {
     case 'invest':
-      await sendMessage(chatId, '📈 INVESTMENT PLANS\n\nPlan 1: Minimum $200, Duration: 30 days\nPlan 2: Minimum $500, Duration: 30 days\n\n(To invest: this demo has no persistence. In full version you would pick a plan and enter amount.)');
+      await sendMessage(chatId, '📈 INVESTMENT PLANS\n\nPlan 1: Minimum $200, Duration: 30 days\nPlan 2: Minimum $500, Duration: 30 days\n\n(To invest: this demo may persist users but investments require full implementation.)');
       break;
     case 'courses':
-      await sendMessage(chatId, '🎓 AIXC TRADING COURSES\n\n1. Forex Fundamentals\n2. Technical Analysis\n3. Price Action\n4. Risk Management\n5. Trading Psychology\n6. MT5\n\n(To view lessons select a course in the full version.)');
+      await sendMessage(chatId, '🎓 AIXC TRADING COURSES\n\n1. Forex Fundamentals\n2. Technical Analysis\n3. Price Action\n4. Risk Management\n5. Trading Psychology\n6. MT5');
       break;
     case 'deposit':
-      await sendMessage(chatId, '💳 Deposit\n\nEnter deposit amount and follow payment instructions. (Demo mode: no persistence)');
+      await sendMessage(chatId, '💳 Deposit\n\nEnter deposit amount and follow payment instructions.');
       break;
     case 'withdraw':
-      await sendMessage(chatId, '💸 Withdraw\n\nEnter withdrawal amount and destination. (Demo mode: no persistence)');
+      await sendMessage(chatId, '💸 Withdraw\n\nEnter withdrawal amount and destination.');
       break;
     case 'referrals':
-      await sendMessage(chatId, '🎁 YOUR REFERRAL\n\nYour referral link: `https://t.me/<your_bot_username>?start=REFCODE`\n\n(Replace with real link in production)');
+      if (db && db.getUserByTelegramId) {
+        const user = await db.getUserByTelegramId(callback_query.from.id).catch(() => null);
+        const code = user ? user.referral_code : '<not set>';
+        await sendMessage(chatId, `🎁 YOUR REFERRAL\n\nYour referral link:\nhttps://t.me/<your_bot_username>?start=${code}\n\n(Replace with real link in production)`);
+      } else {
+        await sendMessage(chatId, '🎁 YOUR REFERRAL\n\nDemo mode: referral link not available.');
+      }
       break;
     case 'transactions':
       await sendMessage(chatId, '📊 TRANSACTION HISTORY\n\n(no stored transactions in demo mode)');
       break;
     case 'profile':
-      await sendMessage(chatId, '👤 MY PROFILE\n\nName: (demo)\nUsername: (demo)\nAccount ID: (demo)\n\n(no persistent profile in demo mode)');
+      if (db && db.getUserByTelegramId) {
+        const user = await db.getUserByTelegramId(callback_query.from.id).catch(() => null);
+        if (user) {
+          const profile = `👤 MY PROFILE\n\nName: ${user.first_name || ''} ${user.last_name || ''}\nUsername: ${user.username ? '@' + user.username : ''}\nAccount ID: AIXC-${user.id || '000'}\n\n💰 Balance: $${(user.balance||0).toFixed ? (user.balance||0).toFixed(2) : user.balance || '0.00'}`;
+          await sendMessage(chatId, profile);
+        } else {
+          await sendMessage(chatId, '👤 MY PROFILE\n\nDemo mode: profile not found.');
+        }
+      } else {
+        await sendMessage(chatId, '👤 MY PROFILE\n\nDemo mode: profile not available.');
+      }
       break;
     case 'support':
-      await sendMessage(chatId, '🆘 Support\n\nOptions: FAQ, Contact admin, Open support ticket (demo mode)');
+      await sendMessage(chatId, '🆘 Support\n\nOptions: FAQ, Contact admin, Open support ticket');
       break;
     default:
       await sendMessage(chatId, 'Unknown action.');
