@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+aiogram==3.0.0b7
+sqlmodel
+asyncpg
+httpx
+python-dotenv
+apscheduler
+alembic
